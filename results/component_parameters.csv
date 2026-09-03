@@ -1,0 +1,24 @@
+component,parameter,value,unit,source
+Site,IT capacity,5000.0,kW,Study design: 5 MW colocation facility
+Site,Capture fraction,0.7,fraction,Study design sensitivity range 0.55-0.80
+Heat pump,Units,4.0,count,Study design
+Heat pump,Rated output per unit,500.0,kW_th,Study design
+Heat pump,Minimum turndown,0.3,fraction,Study design
+Heat pump,Second-law efficiency,0.45,fraction,"Arpagaus et al. (2018), Energy 152:985-1010"
+Heat pump,COP cap,6.0,-,Commercial HTHP manufacturer catalogue convention
+Absorption chiller,Rated cooling,700.0,kW_cool,Study design
+Absorption chiller,Nominal COP,0.72,-,"Kim & Infante Ferreira (2008), Int J Refrig 31:3-15"
+ORC,Maximum heat input,800.0,kW_th,Study design
+ORC,Second-law efficiency,0.55,fraction Carnot,"Quoilin et al. (2013), RSER 22:168-186"
+ORC,Parasitic fraction,0.12,fraction gross,"Quoilin et al. (2013), RSER 22:168-186"
+Thermal store,Capacity,2000.0,kWh,Study design
+Thermal store,Standing loss,0.015,fraction/day,IEA ECES Annex 30 hot-water storage range
+Buffer tank,Capacity,250.0,kWh,Study design
+Buffer tank,Standing loss,0.03,fraction/day,IEA ECES Annex 30 small-tank range
+Mechanical chiller,Nominal COP,5.5,-,ASHRAE Handbook HVAC Systems and Equipment (2020)
+Dry cooler,Capacity,4000.0,kW,Study design
+Dry cooler,Fan fraction,0.018,fraction duty,Eurovent dry-cooler catalogue range
+Tariff,Grid HT industrial,8.0,INR/kWh,Cross-site tariff design assumption
+Tariff,Diesel generation,22.0,INR/kWh,Indian diesel-generation cost range
+Tariff,Displaced LPG,6.9,INR/kWh_th,75 INR/kg LPG at 80% boiler efficiency
+Tariff,ORC export,4.5,INR/kWh,Indian distributed export tariff range

@@ -1,0 +1,3 @@
+scenario,seed,baseline,mpc_improvement_percent
+A,0,tuned,0.5363005689626981
+A,0,naive,19.944452526450373
