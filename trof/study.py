@@ -215,7 +215,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mpc-horizon", type=int, default=48)
     parser.add_argument("--solver-time-limit", type=float, default=None)
     parser.add_argument("--no-timeseries", action="store_true", help="Do not retain per-step files (residual maxima remain in summaries).")
+    parser.add_argument("--shard-index", type=int, default=0, help="Run only this shard of the not-yet-completed queue (for parallel CI).")
+    parser.add_argument("--shard-count", type=int, default=1)
     args = parser.parse_args(argv)
+    if not 0 <= args.shard_index < args.shard_count:
+        parser.error("--shard-index must be in [0, --shard-count)")
     phases = set(args.phases.split(","))
     unknown = phases - {"main", "sweep", "mc", "ablation"}
     if unknown:
@@ -224,6 +228,9 @@ def main(argv: list[str] | None = None) -> int:
     write_static_tables(days=args.days)
     completed = set(_load_registry().get("run_id", pd.Series(dtype=str)).astype(str))
     queue = build_run_queue(args.min_seeds, args.mc_draws, args.days, phases)
+    if args.shard_count > 1:
+        pending = [item for item in queue if item[0].run_id not in completed]
+        queue = pending[args.shard_index::args.shard_count]
     start = time.monotonic()
     for index, (spec, params) in enumerate(queue, start=1):
         if spec.run_id in completed:

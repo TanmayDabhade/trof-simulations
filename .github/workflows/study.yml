@@ -1,0 +1,132 @@
+name: study
+
+# Runs the full TROF study on GitHub-hosted runners. Each round splits the
+# pending runs across parallel shards, merges their registries, commits the
+# results to the branch, and re-dispatches itself until nothing is pending.
+
+on:
+  workflow_dispatch:
+    inputs:
+      shards:
+        description: Parallel runners per round (max 20 on free plans)
+        default: "20"
+      budget_seconds:
+        description: Per-shard budget before it stops starting new runs
+        default: "18000"
+      auto_continue:
+        description: Re-dispatch automatically until the study is complete
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: study-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      pending: ${{ steps.plan.outputs.pending }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e .
+      - id: plan
+        run: |
+          pending=$(python .github/scripts/ci_study.py pending)
+          shards=$(( pending < ${{ inputs.shards }} ? pending : ${{ inputs.shards }} ))
+          echo "pending=$pending" >> "$GITHUB_OUTPUT"
+          echo "shards=$(python -c "import json; print(json.dumps(list(range($shards))))")" >> "$GITHUB_OUTPUT"
+          echo "Pending runs: $pending, shards this round: $shards" >> "$GITHUB_STEP_SUMMARY"
+
+  run:
+    needs: plan
+    if: needs.plan.outputs.pending != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.plan.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e .
+      - name: Run shard
+        timeout-minutes: 340
+        run: >
+          python study.py
+          --budget-seconds ${{ inputs.budget_seconds }}
+          --shard-index ${{ matrix.shard }}
+          --shard-count ${{ strategy.job-total }}
+      - name: Upload shard results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: |
+            results/run_registry.csv
+            results/timeseries/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  merge:
+    needs: [plan, run]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e .
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: shard-*
+          path: shards
+      - name: Merge shards and regenerate tables and figures
+        run: |
+          python .github/scripts/ci_study.py merge shards
+          python figures.py
+          pending=$(python .github/scripts/ci_study.py pending)
+          echo "PENDING=$pending" >> "$GITHUB_ENV"
+          echo "Pending runs after merge: $pending" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: results
+          path: |
+            results/
+            figures/
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+          git add results figures
+          git diff --cached --quiet && exit 0
+          git commit -m "Update study results (${PENDING} runs pending) [skip ci]"
+          for attempt in 1 2 3; do
+            git pull --rebase && git push && exit 0
+            sleep 10
+          done
+          exit 1
+      - name: Continue study
+        # Stop if this round made no progress (e.g. a run that always crashes).
+        if: env.PENDING != '0' && fromJson(env.PENDING) < fromJson(needs.plan.outputs.pending) && inputs.auto_continue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh workflow run study.yml --ref "${{ github.ref_name }}"
+          -f shards=${{ inputs.shards }}
+          -f budget_seconds=${{ inputs.budget_seconds }}
+          -f auto_continue=true
