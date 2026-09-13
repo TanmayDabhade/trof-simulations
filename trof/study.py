@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "results"
 TIMESERIES = RESULTS / "timeseries"
 REGISTRY = RESULTS / "run_registry.csv"
+FAILED_RUNS = RESULTS / "failed_runs.csv"
 
 
 def _load_registry() -> pd.DataFrame:
@@ -217,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-timeseries", action="store_true", help="Do not retain per-step files (residual maxima remain in summaries).")
     parser.add_argument("--shard-index", type=int, default=0, help="Run only this shard of the not-yet-completed queue (for parallel CI).")
     parser.add_argument("--shard-count", type=int, default=1)
+    parser.add_argument("--continue-on-error", action="store_true", help="Record a failed run in failed_runs.csv and continue instead of stopping.")
     args = parser.parse_args(argv)
     if not 0 <= args.shard_index < args.shard_count:
         parser.error("--shard-index must be in [0, --shard-count)")
@@ -242,10 +244,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[{index}/{len(queue)}] {spec.run_id}", flush=True)
         keep_ts = not args.no_timeseries and spec.study_group in {"main", "perfect_forecast"}
         path = TIMESERIES / f"{spec.run_id}.csv" if keep_ts else None
-        _, summary = run_closed_loop(
-            spec, params=params, save_path=path, mpc_horizon=args.mpc_horizon,
-            mpc_solver_time_limit_s=args.solver_time_limit,
-        )
+        try:
+            _, summary = run_closed_loop(
+                spec, params=params, save_path=path, mpc_horizon=args.mpc_horizon,
+                mpc_solver_time_limit_s=args.solver_time_limit,
+            )
+        except (ValueError, RuntimeError) as error:
+            if not args.continue_on_error:
+                raise
+            print(f"FAILED {spec.run_id}: {type(error).__name__}: {error}", flush=True)
+            pd.DataFrame([{"run_id": spec.run_id, "error": f"{type(error).__name__}: {error}"}]).to_csv(
+                FAILED_RUNS, mode="a", header=not FAILED_RUNS.exists(), index=False
+            )
+            continue
         summary["parameters_json"] = json.dumps({
             "capture_fraction": params.capture_fraction,
             "hp_eta2": params.heat_pump.second_law_efficiency,

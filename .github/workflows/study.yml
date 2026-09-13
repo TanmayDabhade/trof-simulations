@@ -83,13 +83,14 @@ jobs:
             (cd "$dir" && python study.py \
               --mc-draws ${{ inputs.mc_draws }} \
               --budget-seconds ${{ inputs.budget_seconds }} \
-              --shard-index $index --shard-count $shard_count \
+              --shard-index $index --shard-count $shard_count --continue-on-error \
               > ../../shard-$index.log 2>&1) &
             pids+=($!)
           done
           status=0
           for pid in "${pids[@]}"; do wait "$pid" || status=1; done
           tail -n 5 shard-*.log
+          grep -h "^FAILED" shard-*.log || true
           exit $status
       - name: Upload shard results
         if: always()
@@ -99,6 +100,7 @@ jobs:
           path: |
             work/*/results/run_registry.csv
             work/*/results/timeseries/
+            work/*/results/failed_runs.csv
             shard-*.log
           if-no-files-found: ignore
           retention-days: 7
@@ -126,6 +128,9 @@ jobs:
           pending=$(python .github/scripts/ci_study.py pending ${{ inputs.mc_draws }})
           echo "PENDING=$pending" >> "$GITHUB_ENV"
           echo "Pending runs after merge: $pending" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f results/failed_runs.csv ]; then
+            echo "Failed runs (not in results): $(( $(wc -l < results/failed_runs.csv) - 1 ))" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: results

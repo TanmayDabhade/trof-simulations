@@ -99,6 +99,20 @@ class HeuristicController:
         remaining_source = raw_capture + min(p.buffer.max_discharge_kw, state.buffer_energy_kwh / p.timestep_hours)
         source_credit = _source_credit_per_absorbed_kwh(ambient, raw_capture, p, tariff)
 
+        # SOC limits apply after standing loss. At the lower bound, a small
+        # maintenance charge is required even if no discretionary charging is
+        # economic; reserve it first so saturated demand cannot crowd it out.
+        if action.store_discharge_kw <= 1e-10:
+            lower_bound = p.store.min_soc * p.store.capacity_kwh
+            minimum_charge = max(
+                0.0,
+                p.store.standing_loss_kw(state.store_energy_kwh, p.timestep_hours)
+                - (state.store_energy_kwh - lower_bound) / p.timestep_hours,
+            )
+            remaining_output, remaining_source = _greedy_add(
+                action, "store_charge_kw", minimum_charge, remaining_output, remaining_source, "store", p
+            )
+
         pathways: list[tuple[str, str, float, str, float]] = []
         # tuple field, sink, requested heat input, label, net value per heat input
         for field, sink, requested in (
@@ -134,28 +148,13 @@ class HeuristicController:
         room_kw = min(
             p.store.max_charge_kw,
             max(0.0, (p.store.max_soc * p.store.capacity_kwh - state.store_energy_kwh) / p.timestep_hours),
-        )
+        ) - action.store_charge_kw
         should_charge = (not self.tuned) or (grid and state.store_energy_kwh < 0.65 * p.store.capacity_kwh)
         if should_charge and action.store_discharge_kw <= 1e-10:
             remaining_output, remaining_source = _greedy_add(action, "store_charge_kw", room_kw, remaining_output, remaining_source, "store", p)
 
         if (not self.tuned) or orc_value > 0.0:
             remaining_output, remaining_source = _greedy_add(action, "orc_heat_kw", p.orc.max_heat_input_kw, remaining_output, remaining_source, "orc", p)
-
-        # SOC limits apply after standing loss. At the lower bound, a small
-        # maintenance charge is required even if no discretionary charging is economic.
-        if action.store_discharge_kw <= 1e-10:
-            lower_bound = p.store.min_soc * p.store.capacity_kwh
-            minimum_charge = max(
-                0.0,
-                p.store.standing_loss_kw(state.store_energy_kwh, p.timestep_hours)
-                - (state.store_energy_kwh - lower_bound) / p.timestep_hours,
-            )
-            if minimum_charge > action.store_charge_kw:
-                extra = minimum_charge - action.store_charge_kw
-                remaining_output, remaining_source = _greedy_add(
-                    action, "store_charge_kw", extra, remaining_output, remaining_source, "store", p
-                )
 
         return _make_dispatch_feasible(action, state, p, raw_capture)
 

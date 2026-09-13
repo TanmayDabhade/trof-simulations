@@ -94,6 +94,13 @@ def advance_plant(
         )
     })
 
+    # The absorption chiller's local capacity control throttles generator heat
+    # to its rating at the realised ambient. Dispatch is sized on forecast
+    # ambient, so a warmer-than-forecast step would otherwise overfeed it.
+    absorption_limit_kw = params.absorption.rated_cooling_kw / max(params.absorption.cop(float(realised["ambient_c"])), 1e-12)
+    if action.absorption_heat_kw > absorption_limit_kw:
+        action = replace(action, absorption_heat_kw=absorption_limit_kw)
+
     delivered = action.hp_delivered_kw
     units_on = int(action.hp_units_on)
     if units_on < 0 or units_on > params.heat_pump.units:

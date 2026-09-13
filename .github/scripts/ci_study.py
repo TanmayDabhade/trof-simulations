@@ -26,6 +26,9 @@ def merge(shard_root: Path) -> None:
             study.TIMESERIES.mkdir(parents=True, exist_ok=True)
             for file in timeseries.glob("*.csv"):
                 shutil.copy2(file, study.TIMESERIES / file.name)
+    failures = [pd.read_csv(path) for path in sorted(shard_root.rglob("failed_runs.csv"))]
+    if failures:
+        pd.concat(failures, ignore_index=True).drop_duplicates("run_id").to_csv(study.FAILED_RUNS, index=False)
     frames = [frame for frame in frames if not frame.empty]
     if not frames:
         return
