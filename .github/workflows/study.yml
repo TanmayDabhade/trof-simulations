@@ -1,22 +1,25 @@
 name: study
 
-# Runs the full TROF study on GitHub-hosted runners. Each round splits the
-# pending runs across parallel shards, merges their registries, commits the
-# results to the branch, and re-dispatches itself until nothing is pending.
+# Runs the TROF study on GitHub-hosted runners. Each round splits the pending
+# runs across jobs x workers (one CBC process per core), merges the shard
+# registries, commits results to the branch, and optionally re-dispatches.
 
 on:
   workflow_dispatch:
     inputs:
-      shards:
-        description: Parallel runners per round (max 20 on free plans)
-        default: "20"
+      mc_draws:
+        description: Monte Carlo parameter draws (paper design is 500)
+        default: "50"
       budget_seconds:
-        description: Per-shard budget before it stops starting new runs
-        default: "18000"
+        description: Stop starting new runs after this many seconds (a run in progress still finishes)
+        default: "9000"
+      jobs:
+        description: Parallel jobs (max 20 concurrent on free plans)
+        default: "20"
       auto_continue:
-        description: Re-dispatch automatically until the study is complete
+        description: Re-dispatch automatically until nothing is pending
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: write
@@ -26,11 +29,14 @@ concurrency:
   group: study-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  WORKERS: 4
+
 jobs:
   plan:
     runs-on: ubuntu-latest
     outputs:
-      shards: ${{ steps.plan.outputs.shards }}
+      jobs: ${{ steps.plan.outputs.jobs }}
       pending: ${{ steps.plan.outputs.pending }}
     steps:
       - uses: actions/checkout@v4
@@ -38,14 +44,15 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: python -m pip install -e .
+      - run: python -m pip install -r requirements.txt
       - id: plan
         run: |
-          pending=$(python .github/scripts/ci_study.py pending)
-          shards=$(( pending < ${{ inputs.shards }} ? pending : ${{ inputs.shards }} ))
+          pending=$(PYTHONPATH=. python .github/scripts/ci_study.py pending ${{ inputs.mc_draws }})
+          jobs=$(( (pending + WORKERS - 1) / WORKERS ))
+          jobs=$(( jobs < ${{ inputs.jobs }} ? jobs : ${{ inputs.jobs }} ))
           echo "pending=$pending" >> "$GITHUB_OUTPUT"
-          echo "shards=$(python -c "import json; print(json.dumps(list(range($shards))))")" >> "$GITHUB_OUTPUT"
-          echo "Pending runs: $pending, shards this round: $shards" >> "$GITHUB_STEP_SUMMARY"
+          echo "jobs=$(python -c "import json; print(json.dumps(list(range($jobs))))")" >> "$GITHUB_OUTPUT"
+          echo "Pending runs: $pending, jobs this round: $jobs x $WORKERS workers" >> "$GITHUB_STEP_SUMMARY"
 
   run:
     needs: plan
@@ -54,29 +61,45 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJson(needs.plan.outputs.shards) }}
+        job: ${{ fromJson(needs.plan.outputs.jobs) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - run: python -m pip install -e .
-      - name: Run shard
+      - run: python -m pip install -r requirements.txt
+      - name: Run shards
         timeout-minutes: 340
-        run: >
-          python study.py
-          --budget-seconds ${{ inputs.budget_seconds }}
-          --shard-index ${{ matrix.shard }}
-          --shard-count ${{ strategy.job-total }}
+        run: |
+          nproc
+          shard_count=$(( ${{ strategy.job-total }} * WORKERS ))
+          pids=()
+          for k in $(seq 0 $((WORKERS - 1))); do
+            dir=work/w$k
+            mkdir -p "$dir"
+            cp -r trof study.py results "$dir/"
+            index=$(( ${{ matrix.job }} * WORKERS + k ))
+            (cd "$dir" && python study.py \
+              --mc-draws ${{ inputs.mc_draws }} \
+              --budget-seconds ${{ inputs.budget_seconds }} \
+              --shard-index $index --shard-count $shard_count \
+              > ../../shard-$index.log 2>&1) &
+            pids+=($!)
+          done
+          status=0
+          for pid in "${pids[@]}"; do wait "$pid" || status=1; done
+          tail -n 5 shard-*.log
+          exit $status
       - name: Upload shard results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: shard-${{ matrix.shard }}
+          name: shard-${{ matrix.job }}
           path: |
-            results/run_registry.csv
-            results/timeseries/
+            work/*/results/run_registry.csv
+            work/*/results/timeseries/
+            shard-*.log
           if-no-files-found: ignore
           retention-days: 7
 
@@ -90,16 +113,17 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: python -m pip install -e .
+      - run: python -m pip install -r requirements.txt
       - uses: actions/download-artifact@v4
         with:
           pattern: shard-*
           path: shards
       - name: Merge shards and regenerate tables and figures
         run: |
+          export PYTHONPATH=.
           python .github/scripts/ci_study.py merge shards
           python figures.py
-          pending=$(python .github/scripts/ci_study.py pending)
+          pending=$(python .github/scripts/ci_study.py pending ${{ inputs.mc_draws }})
           echo "PENDING=$pending" >> "$GITHUB_ENV"
           echo "Pending runs after merge: $pending" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
@@ -127,6 +151,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >
           gh workflow run study.yml --ref "${{ github.ref_name }}"
-          -f shards=${{ inputs.shards }}
+          -f mc_draws=${{ inputs.mc_draws }}
           -f budget_seconds=${{ inputs.budget_seconds }}
+          -f jobs=${{ inputs.jobs }}
           -f auto_continue=true

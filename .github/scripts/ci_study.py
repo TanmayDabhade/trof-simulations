@@ -11,19 +11,17 @@ import pandas as pd
 from trof import study
 
 
-def pending() -> int:
+def pending(mc_draws: int) -> int:
     completed = set(study._load_registry().get("run_id", pd.Series(dtype=str)).astype(str))
-    queue = study.build_run_queue(5, 500, 30, {"main", "sweep", "mc", "ablation"})
+    queue = study.build_run_queue(5, mc_draws, 30, {"main", "sweep", "mc", "ablation"})
     return sum(spec.run_id not in completed for spec, _ in queue)
 
 
 def merge(shard_root: Path) -> None:
     frames = [study._load_registry()]
-    for shard in sorted(shard_root.glob("*")):
-        registry = shard / "run_registry.csv"
-        if registry.exists():
-            frames.append(pd.read_csv(registry))
-        timeseries = shard / "timeseries"
+    for registry in sorted(shard_root.rglob("run_registry.csv")):
+        frames.append(pd.read_csv(registry))
+        timeseries = registry.parent / "timeseries"
         if timeseries.is_dir():
             study.TIMESERIES.mkdir(parents=True, exist_ok=True)
             for file in timeseries.glob("*.csv"):
@@ -39,7 +37,7 @@ def merge(shard_root: Path) -> None:
 if __name__ == "__main__":
     command = sys.argv[1]
     if command == "pending":
-        print(pending())
+        print(pending(int(sys.argv[2])))
     elif command == "merge":
         merge(Path(sys.argv[2]))
     else:

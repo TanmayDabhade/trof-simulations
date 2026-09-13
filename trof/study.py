@@ -230,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
     queue = build_run_queue(args.min_seeds, args.mc_draws, args.days, phases)
     if args.shard_count > 1:
         pending = [item for item in queue if item[0].run_id not in completed]
+        # Finish the core design before Monte Carlo so a time budget cuts only MC draws.
+        pending.sort(key=lambda item: item[0].study_group == "monte_carlo")
         queue = pending[args.shard_index::args.shard_count]
     start = time.monotonic()
     for index, (spec, params) in enumerate(queue, start=1):
