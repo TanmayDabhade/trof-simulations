@@ -28,6 +28,8 @@ TIMESERIES_COLUMNS = [
     "actual_rejection_electric_kw", "cooling_electric_saving_kw", "grid_electric_kw",
     "diesel_electric_kw", "net_cost_inr", "source_balance_residual_kw",
     "hp_balance_residual_kw", "store_balance_residual_kw", "buffer_balance_residual_kw",
+    "dhw_served_kw", "process_served_kw", "cooling_served_kw", "store_discharge_commanded_kw",
+    "dumped_heat_kw", "surplus_cooling_kw", "service_balance_residual_kw",
 ]
 
 
@@ -128,6 +130,8 @@ def run_closed_loop(
 
     result = pd.DataFrame(rows)
     summary = summarise_run(result, spec, p, initial_store, initial_buffer)
+    summary["mpc_solves"] = getattr(controller, "solves", 0)
+    summary["mpc_time_limited_solves"] = getattr(controller, "time_limited_solves", 0)
     if save_path is not None:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         temp = save_path.with_suffix(".tmp")
@@ -156,7 +160,8 @@ def summarise_run(
     baseline_rejection_electric_kwh = energy("baseline_rejection_electric_kw")
     cooling_saving_kwh = energy("cooling_electric_saving_kw")
     max_residual = float(result[[
-        "source_balance_residual_kw", "hp_balance_residual_kw", "store_balance_residual_kw", "buffer_balance_residual_kw"
+        "source_balance_residual_kw", "hp_balance_residual_kw", "store_balance_residual_kw", "buffer_balance_residual_kw",
+        "service_balance_residual_kw",
     ]].abs().to_numpy().max())
     return {
         "run_id": spec.run_id,
@@ -171,6 +176,7 @@ def summarise_run(
         "parameter_draw": -1 if spec.parameter_draw is None else spec.parameter_draw,
         "recovery_fraction_it": absorbed_kwh / max(it_kwh, 1e-12),
         "recovery_fraction_captured": absorbed_kwh / max(site_captured_kwh, 1e-12),
+        "it_heat_mwh": it_kwh / 1000.0,
         "captured_mwh": site_captured_kwh / 1000.0,
         "absorbed_mwh": absorbed_kwh / 1000.0,
         "compressor_mwh": energy("hp_compressor_kw") / 1000.0,
@@ -184,6 +190,10 @@ def summarise_run(
         "orc_electric_mwh": energy("orc_electric_kw") / 1000.0,
         "store_charge_mwh": energy("store_charge_kw") / 1000.0,
         "store_discharge_mwh": energy("store_discharge_kw") / 1000.0,
+        "store_discharge_dhw_mwh": energy("store_discharge_dhw_kw") / 1000.0,
+        "store_discharge_process_mwh": energy("store_discharge_process_kw") / 1000.0,
+        "dumped_heat_mwh": energy("dumped_heat_kw") / 1000.0,
+        "surplus_cooling_mwh": energy("surplus_cooling_kw") / 1000.0,
         "store_net_change_mwh": (float(result.iloc[-1]["store_energy_kwh"]) - initial_store_kwh) / 1000.0,
         "store_standing_loss_mwh": energy("store_standing_loss_kw") / 1000.0,
         "buffer_net_change_mwh": (float(result.iloc[-1]["buffer_energy_kwh"]) - initial_buffer_kwh) / 1000.0,
@@ -197,5 +207,6 @@ def summarise_run(
         "max_hp_residual_kw": float(result["hp_balance_residual_kw"].abs().max()),
         "max_store_residual_kw": float(result["store_balance_residual_kw"].abs().max()),
         "max_buffer_residual_kw": float(result["buffer_balance_residual_kw"].abs().max()),
+        "max_service_residual_kw": float(result["service_balance_residual_kw"].abs().max()),
         "max_balance_residual_kw": max_residual,
     }

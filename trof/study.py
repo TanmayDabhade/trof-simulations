@@ -126,6 +126,10 @@ def aggregate_tables() -> None:
                     - row.store_net_change_mwh - row.store_standing_loss_mwh
                     - row.rejected_mwh - row.buffer_net_change_mwh - row.buffer_standing_loss_mwh
                 )
+                service_closure = (
+                    row.dhw_hp_mwh + row.process_hp_mwh + row.store_discharge_mwh
+                    - row.dhw_delivered_mwh - row.process_delivered_mwh - row.dumped_heat_mwh
+                )
                 audits.append({
                     "scenario": scenario, "seed": row.seed,
                     "captured_mwh": row.captured_mwh, "absorbed_mwh": row.absorbed_mwh,
@@ -137,12 +141,18 @@ def aggregate_tables() -> None:
                     "absorption_heat_mwh": row.absorption_heat_mwh,
                     "orc_heat_mwh": row.orc_heat_mwh,
                     "store_net_change_mwh": row.store_net_change_mwh,
+                    "store_charge_mwh": row.store_charge_mwh,
                     "store_discharge_mwh": row.store_discharge_mwh,
+                    "dumped_heat_mwh": row.dumped_heat_mwh,
+                    "absorption_cooling_mwh": row.absorption_cooling_mwh,
+                    "surplus_cooling_mwh": row.surplus_cooling_mwh,
+                    "it_heat_mwh": row.it_heat_mwh if "it_heat_mwh" in row else float("nan"),
                     "store_standing_loss_mwh": row.store_standing_loss_mwh,
                     "buffer_net_change_mwh": row.buffer_net_change_mwh,
                     "buffer_standing_loss_mwh": row.buffer_standing_loss_mwh,
                     "rejected_mwh": row.rejected_mwh,
                     "closure_residual_mwh": closure,
+                    "service_closure_residual_mwh": service_closure,
                     "max_timestep_residual_kw": row.max_balance_residual_kw,
                 })
         pd.DataFrame(audits).to_csv(RESULTS / "energy_balance_audit.csv", index=False)
@@ -214,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--days", type=int, default=30, help="30 is the paper design; smaller values are for smoke tests only.")
     parser.add_argument("--phases", default="main,sweep,mc,ablation", help="Comma-separated subset of main,sweep,mc,ablation")
     parser.add_argument("--mpc-horizon", type=int, default=48)
-    parser.add_argument("--solver-time-limit", type=float, default=None)
+    parser.add_argument("--solver-time-limit", type=float, default=60.0)
     parser.add_argument("--no-timeseries", action="store_true", help="Do not retain per-step files (residual maxima remain in summaries).")
     parser.add_argument("--shard-index", type=int, default=0, help="Run only this shard of the not-yet-completed queue (for parallel CI).")
     parser.add_argument("--shard-count", type=int, default=1)

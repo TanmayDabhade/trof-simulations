@@ -11,9 +11,9 @@ import pandas as pd
 from trof import study
 
 
-def pending(mc_draws: int) -> int:
+def pending(mc_draws: int, phases: str) -> int:
     completed = set(study._load_registry().get("run_id", pd.Series(dtype=str)).astype(str))
-    queue = study.build_run_queue(5, mc_draws, 30, {"main", "sweep", "mc", "ablation"})
+    queue = study.build_run_queue(5, mc_draws, 30, set(phases.split(",")))
     return sum(spec.run_id not in completed for spec, _ in queue)
 
 
@@ -40,7 +40,7 @@ def merge(shard_root: Path) -> None:
 if __name__ == "__main__":
     command = sys.argv[1]
     if command == "pending":
-        print(pending(int(sys.argv[2])))
+        print(pending(int(sys.argv[2]), sys.argv[3] if len(sys.argv) > 3 else "main,sweep,mc,ablation"))
     elif command == "merge":
         merge(Path(sys.argv[2]))
     else:

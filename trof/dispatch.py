@@ -162,11 +162,24 @@ class HeuristicController:
 class MPCController:
     name = "mpc"
 
-    def __init__(self, params: PlantParameters, horizon: int = 48, replan_steps: int = 2, solver_time_limit_s: float | None = None):
+    def __init__(
+        self,
+        params: PlantParameters,
+        horizon: int = 48,
+        replan_steps: int = 2,
+        solver_time_limit_s: float | None = 60.0,
+        gap_abs_inr: float = 50.0,
+    ):
         self.params = params
         self.horizon = horizon
         self.replan_steps = replan_steps
         self.solver_time_limit_s = solver_time_limit_s
+        # CBC stops once the incumbent is within this many INR of the best
+        # bound for the 12 h horizon objective. Proving exact optimality took
+        # minutes on some steps; 50 INR is ~0.03% of a day's operating cost.
+        self.gap_abs_inr = gap_abs_inr
+        self.solves = 0
+        self.time_limited_solves = 0
         self._plan: dict[int, DispatchAction] = {}
 
     def act(self, step: int, state: PlantState, forecast: pd.DataFrame, realised_now: pd.Series) -> DispatchAction:
@@ -182,8 +195,7 @@ class MPCController:
         model = pulp.LpProblem("trof_mpc", pulp.LpMinimize)
         paths = ("dhw", "process", "absorption", "orc", "store")
         q = pulp.LpVariable.dicts("q", (range(n), paths), lowBound=0.0)
-        unit_q = pulp.LpVariable.dicts("unit_q", (range(n), range(p.heat_pump.units)), lowBound=0.0)
-        unit_on = pulp.LpVariable.dicts("unit_on", (range(n), range(p.heat_pump.units)), cat="Binary")
+        units_on = pulp.LpVariable.dicts("units_on", range(n), lowBound=0, upBound=p.heat_pump.units, cat="Integer")
         discharge_dhw = pulp.LpVariable.dicts("discharge_dhw", range(n), lowBound=0.0)
         discharge_process = pulp.LpVariable.dicts("discharge_process", range(n), lowBound=0.0)
         store_mode = pulp.LpVariable.dicts("store_charge_mode", range(n), cat="Binary")
@@ -214,15 +226,12 @@ class MPCController:
             absorbed = pulp.lpSum(q[h][path] * (1.0 - 1.0 / cops[path]) for path in paths)
             compressor = pulp.lpSum(q[h][path] / cops[path] for path in paths)
             delivered = pulp.lpSum(q[h][path] for path in paths)
-            model += delivered == pulp.lpSum(unit_q[h][j] for j in range(p.heat_pump.units))
-            for j in range(p.heat_pump.units):
-                model += unit_q[h][j] <= p.heat_pump.rated_output_kw_per_unit * unit_on[h][j]
-                model += unit_q[h][j] >= p.heat_pump.min_turndown * p.heat_pump.rated_output_kw_per_unit * unit_on[h][j]
-                if j < p.heat_pump.units - 1:
-                    # Identical modules otherwise create 4! equivalent branch
-                    # permutations at every horizon step.
-                    model += unit_on[h][j] >= unit_on[h][j + 1]
-                    model += unit_q[h][j] >= unit_q[h][j + 1]
+            # Identical modules share load freely, so n modules on can deliver
+            # any output in [n*turndown*rated, n*rated]. An integer module
+            # count is therefore equivalent to per-module binaries and avoids
+            # their symmetric branching.
+            model += delivered <= p.heat_pump.rated_output_kw_per_unit * units_on[h]
+            model += delivered >= p.heat_pump.min_turndown * p.heat_pump.rated_output_kw_per_unit * units_on[h]
             capture = p.capture_fraction * float(row["it_kw"])
             model += absorbed <= capture
             model += q[h]["orc"] <= p.orc.max_heat_input_kw
@@ -257,10 +266,16 @@ class MPCController:
         # Modest terminal value prevents horizon-end dumping while valuing useful heat.
         objective.append(-0.25 * p.tariffs.displaced_lpg_inr_per_kwh_th * store_e[n])
         model += pulp.lpSum(objective)
-        solver = pulp.PULP_CBC_CMD(msg=False, threads=1, timeLimit=self.solver_time_limit_s)
-        status = model.solve(solver)
-        if pulp.LpStatus[status] != "Optimal":
-            raise RuntimeError(f"MPC solve failed: {pulp.LpStatus[status]}")
+        solver = pulp.PULP_CBC_CMD(msg=False, threads=1, timeLimit=self.solver_time_limit_s, gapAbs=self.gap_abs_inr)
+        model.solve(solver)
+        # PuLP reports "Optimal" even when CBC stops on the time limit, so the
+        # solution status is checked directly: 1 = within gap, 2 = feasible
+        # incumbent at the time limit (counted and reported), else failure.
+        if model.sol_status not in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible):
+            raise RuntimeError(f"MPC solve failed: solution status {model.sol_status}")
+        self.solves += 1
+        if model.sol_status == pulp.LpSolutionIntegerFeasible:
+            self.time_limited_solves += 1
 
         actions: list[DispatchAction] = []
         for h in range(n):
@@ -272,7 +287,7 @@ class MPCController:
                 store_charge_kw=max(0.0, pulp.value(q[h]["store"]) or 0.0),
                 store_discharge_dhw_kw=max(0.0, pulp.value(discharge_dhw[h]) or 0.0),
                 store_discharge_process_kw=max(0.0, pulp.value(discharge_process[h]) or 0.0),
-                hp_units_on=sum(1 for j in range(p.heat_pump.units) if (pulp.value(unit_on[h][j]) or 0.0) > 0.5),
+                hp_units_on=int(round(pulp.value(units_on[h]) or 0.0)),
             )
             actions.append(action)
         return actions
