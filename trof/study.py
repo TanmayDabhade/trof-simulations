@@ -122,13 +122,16 @@ def aggregate_tables() -> None:
                     row.captured_mwh + row.compressor_mwh
                     - row.dhw_hp_mwh - row.process_hp_mwh
                     - row.absorption_heat_mwh - row.orc_heat_mwh
-                    - row.store_discharge_mwh
-                    - row.store_net_change_mwh - row.store_standing_loss_mwh
+                    - row.store_charge_commanded_mwh
                     - row.rejected_mwh - row.buffer_net_change_mwh - row.buffer_standing_loss_mwh
                 )
+                store_closure = (
+                    row.store_charge_mwh - row.store_discharge_mwh
+                    - row.store_net_change_mwh - row.store_standing_loss_mwh
+                )
                 service_closure = (
-                    row.dhw_hp_mwh + row.process_hp_mwh + row.store_discharge_mwh
-                    - row.dhw_delivered_mwh - row.process_delivered_mwh - row.dumped_heat_mwh
+                    row.dhw_hp_mwh + row.process_hp_mwh + row.store_charge_commanded_mwh + row.store_discharge_mwh
+                    - row.dhw_delivered_mwh - row.process_delivered_mwh - row.store_charge_mwh - row.dumped_heat_mwh
                 )
                 audits.append({
                     "scenario": scenario, "seed": row.seed,
@@ -152,6 +155,7 @@ def aggregate_tables() -> None:
                     "buffer_standing_loss_mwh": row.buffer_standing_loss_mwh,
                     "rejected_mwh": row.rejected_mwh,
                     "closure_residual_mwh": closure,
+                    "store_closure_residual_mwh": store_closure,
                     "service_closure_residual_mwh": service_closure,
                     "max_timestep_residual_kw": row.max_balance_residual_kw,
                 })

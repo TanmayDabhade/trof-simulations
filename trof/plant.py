@@ -137,16 +137,26 @@ def advance_plant(
     process_demand_kw = float(realised["process_demand_kw"])
     store_discharge_dhw_kw = min(action.store_discharge_dhw_kw, max(0.0, dhw_demand_kw - action.dhw_heat_kw))
     store_discharge_process_kw = min(action.store_discharge_process_kw, max(0.0, process_demand_kw - action.process_heat_kw))
-    store_discharge_kw = store_discharge_dhw_kw + store_discharge_process_kw
 
     # Main thermal store: losses are evaluated from the beginning-of-step state.
+    # A plan made from a forecast state can meet a store that is fuller or
+    # emptier than predicted, so charge is limited to the remaining room
+    # (the excess heat is dumped) and discharge to the energy above minimum.
     store_loss_kw = params.store.standing_loss_kw(state.store_energy_kwh, dt)
-    next_store = state.store_energy_kwh + dt * (action.store_charge_kw - store_discharge_kw - store_loss_kw)
     store_min = params.store.min_soc * params.store.capacity_kwh
     store_max = params.store.max_soc * params.store.capacity_kwh
+    store_charge_kw = min(action.store_charge_kw, max(0.0, (store_max - state.store_energy_kwh) / dt + store_loss_kw))
+    available_discharge_kw = max(0.0, (state.store_energy_kwh - store_min) / dt - store_loss_kw)
+    requested_discharge_kw = store_discharge_dhw_kw + store_discharge_process_kw
+    if requested_discharge_kw > available_discharge_kw:
+        scale = available_discharge_kw / requested_discharge_kw
+        store_discharge_dhw_kw *= scale
+        store_discharge_process_kw *= scale
+    store_discharge_kw = store_discharge_dhw_kw + store_discharge_process_kw
+    next_store = state.store_energy_kwh + dt * (store_charge_kw - store_discharge_kw - store_loss_kw)
     if next_store < store_min - constraint_tol or next_store > store_max + constraint_tol:
         raise ValueError("thermal store SOC bound exceeded")
-    store_residual_kw = (next_store - state.store_energy_kwh) / dt - action.store_charge_kw + store_discharge_kw + store_loss_kw
+    store_residual_kw = (next_store - state.store_energy_kwh) / dt - store_charge_kw + store_discharge_kw + store_loss_kw
     _assert_residual("store", store_residual_kw, tol)
 
     # Capture buffer moves only the excess/deficit around the source boundary.
@@ -182,11 +192,15 @@ def advance_plant(
     dhw_served_kw = min(dhw_demand_kw, action.dhw_heat_kw + store_discharge_dhw_kw)
     process_served_kw = min(process_demand_kw, action.process_heat_kw + store_discharge_process_kw)
     cooling_served_kw = min(float(realised["cooling_demand_kw"]), absorption_cooling_kw)
-    dumped_heat_kw = max(0.0, action.dhw_heat_kw - dhw_demand_kw) + max(0.0, action.process_heat_kw - process_demand_kw)
+    dumped_heat_kw = (
+        max(0.0, action.dhw_heat_kw - dhw_demand_kw)
+        + max(0.0, action.process_heat_kw - process_demand_kw)
+        + (action.store_charge_kw - store_charge_kw)
+    )
     surplus_cooling_kw = absorption_cooling_kw - cooling_served_kw
     service_residual_kw = (
-        action.dhw_heat_kw + action.process_heat_kw + store_discharge_kw
-        - dhw_served_kw - process_served_kw - dumped_heat_kw
+        action.dhw_heat_kw + action.process_heat_kw + action.store_charge_kw + store_discharge_kw
+        - dhw_served_kw - process_served_kw - store_charge_kw - dumped_heat_kw
     )
     _assert_residual("service", service_residual_kw, tol)
     fallback_dhw_kw = max(0.0, float(realised["dhw_demand_kw"]) - dhw_served_kw)
@@ -234,11 +248,12 @@ def advance_plant(
         "process_heat_kw": action.process_heat_kw,
         "absorption_heat_kw": action.absorption_heat_kw,
         "orc_heat_kw": action.orc_heat_kw,
-        "store_charge_kw": action.store_charge_kw,
+        "store_charge_kw": store_charge_kw,
         "store_discharge_kw": store_discharge_kw,
         "store_discharge_dhw_kw": store_discharge_dhw_kw,
         "store_discharge_process_kw": store_discharge_process_kw,
         "store_discharge_commanded_kw": action.store_discharge_kw,
+        "store_charge_commanded_kw": action.store_charge_kw,
         "dumped_heat_kw": dumped_heat_kw,
         "surplus_cooling_kw": surplus_cooling_kw,
         "store_energy_kwh": next_store,

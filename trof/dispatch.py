@@ -279,14 +279,17 @@ class MPCController:
 
         actions: list[DispatchAction] = []
         for h in range(n):
+            # CBC integrality tolerance can leave a mode binary at ~1e-7, which
+            # permits a sub-milliwatt flow on the excluded side; round the mode.
+            charging = (pulp.value(store_mode[h]) or 0.0) > 0.5
             action = DispatchAction(
                 dhw_heat_kw=max(0.0, pulp.value(q[h]["dhw"]) or 0.0),
                 process_heat_kw=max(0.0, pulp.value(q[h]["process"]) or 0.0),
                 absorption_heat_kw=max(0.0, pulp.value(q[h]["absorption"]) or 0.0),
                 orc_heat_kw=max(0.0, pulp.value(q[h]["orc"]) or 0.0),
-                store_charge_kw=max(0.0, pulp.value(q[h]["store"]) or 0.0),
-                store_discharge_dhw_kw=max(0.0, pulp.value(discharge_dhw[h]) or 0.0),
-                store_discharge_process_kw=max(0.0, pulp.value(discharge_process[h]) or 0.0),
+                store_charge_kw=max(0.0, pulp.value(q[h]["store"]) or 0.0) if charging else 0.0,
+                store_discharge_dhw_kw=0.0 if charging else max(0.0, pulp.value(discharge_dhw[h]) or 0.0),
+                store_discharge_process_kw=0.0 if charging else max(0.0, pulp.value(discharge_process[h]) or 0.0),
                 hp_units_on=int(round(pulp.value(units_on[h]) or 0.0)),
             )
             actions.append(action)

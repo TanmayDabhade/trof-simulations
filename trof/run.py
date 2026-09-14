@@ -28,7 +28,7 @@ TIMESERIES_COLUMNS = [
     "actual_rejection_electric_kw", "cooling_electric_saving_kw", "grid_electric_kw",
     "diesel_electric_kw", "net_cost_inr", "source_balance_residual_kw",
     "hp_balance_residual_kw", "store_balance_residual_kw", "buffer_balance_residual_kw",
-    "dhw_served_kw", "process_served_kw", "cooling_served_kw", "store_discharge_commanded_kw",
+    "dhw_served_kw", "process_served_kw", "cooling_served_kw", "store_discharge_commanded_kw", "store_charge_commanded_kw",
     "dumped_heat_kw", "surplus_cooling_kw", "service_balance_residual_kw",
 ]
 
@@ -189,6 +189,7 @@ def summarise_run(
         "orc_heat_mwh": energy("orc_heat_kw") / 1000.0,
         "orc_electric_mwh": energy("orc_electric_kw") / 1000.0,
         "store_charge_mwh": energy("store_charge_kw") / 1000.0,
+        "store_charge_commanded_mwh": energy("store_charge_commanded_kw") / 1000.0,
         "store_discharge_mwh": energy("store_discharge_kw") / 1000.0,
         "store_discharge_dhw_mwh": energy("store_discharge_dhw_kw") / 1000.0,
         "store_discharge_process_mwh": energy("store_discharge_process_kw") / 1000.0,
